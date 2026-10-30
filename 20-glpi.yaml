@@ -1,0 +1,98 @@
+# GLPI 11.0.7 (PHP 8.3 en PHP-FPM)
+# L'image localhost/glpi-fpm:11.0.7 est construite sur le noeud (voir le guide), d'ou imagePullPolicy: Never.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: glpi-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: glpi
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: glpi
+  template:
+    metadata:
+      labels:
+        app: glpi
+    spec:
+      initContainers:
+        # Copie le code de GLPI dans le volume au premier demarrage seulement
+        - name: init-glpi
+          image: localhost/glpi-fpm:11.0.7
+          imagePullPolicy: Never
+          securityContext:
+            runAsUser: 0
+          command:
+            - sh
+            - -c
+            - "if [ ! -f /shared/public/index.php ]; then cp -a /var/www/glpi/. /shared/ && chown -R 33:33 /shared; fi"
+          volumeMounts:
+            - name: www
+              mountPath: /shared
+      containers:
+        - name: php-fpm
+          image: localhost/glpi-fpm:11.0.7
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 9000
+          readinessProbe:
+            tcpSocket:
+              port: 9000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 768Mi
+          volumeMounts:
+            - name: www
+              mountPath: /var/www/glpi
+        # Taches automatiques de GLPI : front/cron.php toutes les 60 secondes, en tant que www-data
+        - name: cron
+          image: localhost/glpi-fpm:11.0.7
+          imagePullPolicy: Never
+          securityContext:
+            runAsUser: 33
+            runAsGroup: 33
+          command:
+            - sh
+            - -c
+            - "while true; do php /var/www/glpi/front/cron.php || true; sleep 60; done"
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: www
+              mountPath: /var/www/glpi
+      volumes:
+        - name: www
+          persistentVolumeClaim:
+            claimName: glpi-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: glpi
+spec:
+  selector:
+    app: glpi
+  ports:
+    - port: 9000
+      targetPort: 9000

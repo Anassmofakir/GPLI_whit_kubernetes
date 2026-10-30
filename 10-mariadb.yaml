@@ -1,0 +1,81 @@
+# MariaDB pour GLPI
+# Le Secret "mariadb-secret" se cree AVANT avec kubectl create secret (voir le guide),
+# pour ne jamais ecrire les mots de passe dans un fichier.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mariadb-init
+data:
+  grant-timezone.sql: |
+    GRANT SELECT ON mysql.time_zone_name TO 'glpi'@'%';
+    FLUSH PRIVILEGES;
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mariadb-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mariadb
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: mariadb
+  template:
+    metadata:
+      labels:
+        app: mariadb
+    spec:
+      containers:
+        - name: mariadb
+          image: docker.io/library/mariadb:11.4
+          envFrom:
+            - secretRef:
+                name: mariadb-secret
+          ports:
+            - containerPort: 3306
+          readinessProbe:
+            tcpSocket:
+              port: 3306
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: mariadb-pvc
+        - name: init
+          configMap:
+            name: mariadb-init
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mariadb
+spec:
+  selector:
+    app: mariadb
+  ports:
+    - port: 3306
+      targetPort: 3306
